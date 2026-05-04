@@ -219,7 +219,6 @@
 <script>
   // ══════════════════════════════════════════════════
   // 🔧 REMPLACEZ PAR VOTRE firebaseConfig
-  import { initializeApp } from "firebase/app";
   // ══════════════════════════════════════════════════
   const firebaseConfig = {
   apiKey: "AIzaSyAw44WpD2pa6J1BG1nlqOQpHPantD-Ri9U",
@@ -235,9 +234,15 @@
   // ══════════════════════════════════════════════════
 
   // Init Firebase (compat SDK — pas de module scope)
-  initializeApp(firebaseConfig);
-  const auth = getAuth();
-  const db   = getFirestore();
+// Initialisation de Firebase (Syntaxe COMPAT)
+firebase.initializeApp(firebaseConfig);
+
+// Accès aux services
+const auth = firebase.auth();
+const db   = firebase.firestore();
+
+// Note : Avec la version compat, vous n'avez plus besoin d'appeler getAuth() 
+// ou getFirestore() comme des fonctions importées.
 
   let ws = null;
   let currentUser = null;
