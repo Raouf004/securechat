@@ -6,310 +6,10 @@
   <title>SecureChat</title>
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 
-  <!-- Firebase SDK -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import {
-      getAuth, createUserWithEmailAndPassword,
-      signInWithEmailAndPassword, signOut, onAuthStateChanged
-    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-    import {
-      getFirestore, collection, addDoc,
-      query, orderBy, onSnapshot, serverTimestamp
-    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
-    // ══════════════════════════════════════════════════
-    // 🔧 REMPLACEZ CES VALEURS PAR VOTRE firebaseConfig
-    // ══════════════════════════════════════════════════
-    // Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
-const firebaseConfig = {
-  apiKey: "AIzaSyAw44WpD2pa6J1BG1nlqOQpHPantD-Ri9U",
-  authDomain: "chat-67fc8.firebaseapp.com",
-  projectId: "chat-67fc8",
-  storageBucket: "chat-67fc8.firebasestorage.app",
-  messagingSenderId: "519172128581",
-  appId: "1:519172128581:web:2583a60089607553db482c"
-};
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-    // ══════════════════════════════════════════════════
-
-    // 🔧 URL de votre backend Render.com (remplacez après déploiement)
-    // Exemple : "wss://securechat-backend.onrender.com/ws/"
-    const WS_BASE = "wss://VOTRE_BACKEND.onrender.com/ws/";
-
-    const firebaseApp = initializeApp(firebaseConfig);
-    const auth        = getAuth(firebaseApp);
-    const db          = getFirestore(firebaseApp);
-
-    let ws = null;
-    let currentUser = null;
-    let unsubscribeFirestore = null;
-
-    // ── ALGO INFO ──
-    const algoInfo = {
-      AES:     { cls: "aes",     label: "AES-CBC-256", desc: "Symétrique · blocs 128 bits · clé 256 bits" },
-      DES:     { cls: "des",     label: "DES-CBC",     desc: "Legacy symétrique · blocs 64 bits (pédagogique)" },
-      ElGamal: { cls: "elgamal", label: "ElGamal",     desc: "Asymétrique · logarithme discret" }
-    };
-
-    // ════════════════════════════════
-    // AUTH
-    // ════════════════════════════════
-    window.doRegister = async () => {
-      const email = document.getElementById("auth-email").value.trim();
-      const pass  = document.getElementById("auth-pass").value;
-      const pseudo= document.getElementById("auth-pseudo").value.trim();
-      if (!email || !pass || !pseudo) return showAuthError("Remplissez tous les champs.");
-      try {
-        await createUserWithEmailAndPassword(auth, email, pass);
-        localStorage.setItem("sc_pseudo", pseudo);
-      } catch(e) { showAuthError(e.message); }
-    };
-
-    window.doLogin = async () => {
-      const email = document.getElementById("auth-email").value.trim();
-      const pass  = document.getElementById("auth-pass").value;
-      if (!email || !pass) return showAuthError("Email et mot de passe requis.");
-      try {
-        await signInWithEmailAndPassword(auth, email, pass);
-      } catch(e) { showAuthError(e.message); }
-    };
-
-    window.doLogout = async () => {
-      if (ws) ws.close();
-      if (unsubscribeFirestore) unsubscribeFirestore();
-      await signOut(auth);
-    };
-
-    function showAuthError(msg) {
-      const el = document.getElementById("auth-error");
-      el.textContent = msg;
-      el.style.display = "block";
-      setTimeout(() => { el.style.display = "none"; }, 4000);
-    }
-
-    window.toggleAuthMode = () => {
-      const pseudoField = document.getElementById("pseudo-field");
-      const btn1 = document.getElementById("btn-login");
-      const btn2 = document.getElementById("btn-register");
-      const title = document.getElementById("auth-title");
-      const isLogin = pseudoField.style.display === "none";
-      pseudoField.style.display = isLogin ? "block" : "none";
-      btn1.style.display = isLogin ? "none" : "block";
-      btn2.style.display = isLogin ? "block" : "none";
-      title.textContent = isLogin ? "Créer un compte" : "Connexion";
-      document.getElementById("auth-toggle-text").textContent = isLogin ? "Déjà un compte ? " : "Pas de compte ? ";
-      document.getElementById("auth-toggle-link").textContent = isLogin ? "Se connecter" : "S'inscrire";
-      document.getElementById("auth-error").style.display = "none";
-    };
-
-    // ════════════════════════════════
-    // AUTH STATE
-    // ════════════════════════════════
-    onAuthStateChanged(auth, user => {
-      if (user) {
-        currentUser = user;
-        const pseudo = localStorage.getItem("sc_pseudo") || user.email.split("@")[0];
-        enterApp(pseudo, user);
-      } else {
-        currentUser = null;
-        leaveApp();
-      }
-    });
-
-    function enterApp(pseudo, user) {
-      document.getElementById("auth-screen").style.display = "none";
-      document.getElementById("app").style.display = "grid";
-      document.getElementById("user-email").textContent = user.email;
-      document.getElementById("user-pseudo-display").textContent = pseudo;
-      connectWS(pseudo);
-      listenFirestore();
-    }
-
-    function leaveApp() {
-      document.getElementById("auth-screen").style.display = "flex";
-      document.getElementById("app").style.display = "none";
-      document.getElementById("messages").innerHTML = "";
-    }
-
-    // ════════════════════════════════
-    // WEBSOCKET
-    // ════════════════════════════════
-    function connectWS(pseudo) {
-      ws = new WebSocket(WS_BASE + encodeURIComponent(pseudo));
-      ws.onopen = () => setStatus(true);
-      ws.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        if (data.type === "system") {
-          appendSystem(data.text);
-          updateUsers(data.users);
-        } else if (data.type === "message") {
-          renderMessage(data, false); // temps réel (pas depuis Firestore)
-        }
-      };
-      ws.onclose = () => setStatus(false);
-      ws.onerror = () => setStatus(false);
-    }
-
-    window.sendMessage = async () => {
-      const input = document.getElementById("msg-input");
-      const text = input.value.trim();
-      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-      const algo = document.getElementById("algo-select").value;
-      const pseudo = localStorage.getItem("sc_pseudo") || currentUser.email.split("@")[0];
-      input.value = "";
-
-      ws.send(JSON.stringify({
-        text, algo,
-        uid: currentUser.uid,
-        timestamp: new Date().toISOString()
-      }));
-    };
-
-    document.addEventListener("DOMContentLoaded", () => {
-      document.getElementById("msg-input")?.addEventListener("keydown", e => {
-        if (e.key === "Enter") { e.preventDefault(); window.sendMessage(); }
-      });
-      document.getElementById("auth-pass")?.addEventListener("keydown", e => {
-        if (e.key === "Enter") window.doLogin();
-      });
-    });
-
-    // ════════════════════════════════
-    // FIRESTORE — sauvegarde messages
-    // ════════════════════════════════
-    async function saveToFirestore(data) {
-      try {
-        await addDoc(collection(db, "messages"), {
-          from:      data.from,
-          plaintext: data.plaintext,
-          encrypted: JSON.stringify(data.encrypted),
-          algo:      data.algo,
-          uid:       data.uid || "",
-          createdAt: serverTimestamp()
-        });
-      } catch(e) { console.error("Firestore save error:", e); }
-    }
-
-    function listenFirestore() {
-      const q = query(collection(db, "messages"), orderBy("createdAt", "asc"));
-      unsubscribeFirestore = onSnapshot(q, snapshot => {
-        snapshot.docChanges().forEach(change => {
-          if (change.type === "added") {
-            const d = change.doc.data();
-            // On n'affiche que l'historique passé (pas les messages temps réel déjà affichés)
-            if (d.createdAt) {
-              const ts = d.createdAt.toDate ? d.createdAt.toDate().toISOString() : "";
-              renderMessage({
-                from: d.from,
-                plaintext: d.plaintext,
-                encrypted: JSON.parse(d.encrypted || "{}"),
-                algo: d.algo,
-                timestamp: ts,
-                fromHistory: true
-              }, true);
-            }
-          }
-        });
-      });
-    }
-
-    // ════════════════════════════════
-    // UI RENDER
-    // ════════════════════════════════
-    const renderedIds = new Set();
-
-    function renderMessage(data, fromHistory) {
-      // évite les doublons entre temps réel et Firestore
-      const msgId = `${data.from}-${data.timestamp}-${data.plaintext}`;
-      if (renderedIds.has(msgId)) return;
-      renderedIds.add(msgId);
-
-      const pseudo = localStorage.getItem("sc_pseudo") || (currentUser?.email.split("@")[0] || "");
-      const isMe = data.from === pseudo;
-      const box = document.getElementById("messages");
-      const time = data.timestamp ? new Date(data.timestamp).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}) : "";
-      const enc = data.encrypted || {};
-      const algo = data.algo || "AES";
-      const cls = algo === "ElGamal" ? "elgamal" : algo === "DES" ? "des" : "aes";
-
-      let encDetails = "";
-      if (algo === "AES" || algo === "DES") {
-        encDetails = `
-          <div class="ef">IV</div><div class="ev">${enc.iv || ""}</div>
-          <div class="ef">Chiffré (base64)</div><div class="ev">${enc.ciphertext || ""}</div>`;
-      } else if (algo === "ElGamal") {
-        const c2 = enc.c2_list || [];
-        const preview = c2.slice(0,3).join(", ") + (c2.length>3?" …":"");
-        encDetails = `
-          <div class="ef">C1</div><div class="ev">${String(enc.c1||"").substring(0,48)}…</div>
-          <div class="ef">C2 (aperçu)</div><div class="ev">${preview}</div>`;
-      }
-
-      const div = document.createElement("div");
-      div.className = "msg " + (isMe ? "me" : "them");
-      div.innerHTML = `
-        <div class="msg-meta"><span class="sender">${esc(data.from)}</span><span>${time}</span></div>
-        <div class="bubble">${esc(data.plaintext)}</div>
-        <div class="enc-box">
-          <div class="enc-algo ${cls}">🔒 ${enc.algo || algo}</div>
-          ${encDetails}
-          <div class="dec-line">✓ Déchiffré : ${esc(data.plaintext)}</div>
-        </div>`;
-      box.appendChild(div);
-      box.scrollTop = box.scrollHeight;
-
-      // Sauvegarder dans Firestore (seulement les messages temps réel, pas l'historique)
-      if (!fromHistory && currentUser) saveToFirestore(data);
-    }
-
-    function appendSystem(text) {
-      const box = document.getElementById("messages");
-      const d = document.createElement("div");
-      d.className = "sys-msg"; d.textContent = text;
-      box.appendChild(d); box.scrollTop = box.scrollHeight;
-    }
-
-    function updateUsers(users) {
-      const list = document.getElementById("user-list");
-      const pseudo = localStorage.getItem("sc_pseudo") || "";
-      list.innerHTML = "";
-      users.forEach(u => {
-        const d = document.createElement("div");
-        d.className = "user-row";
-        d.innerHTML = `<div class="udot"></div><span class="uname ${u===pseudo?'me':''}">${esc(u)}${u===pseudo?' (moi)':''}</span>`;
-        list.appendChild(d);
-      });
-    }
-
-    window.updateAlgoBadge = () => {
-      const algo = document.getElementById("algo-select")?.value || "AES";
-      const info = algoInfo[algo] || algoInfo.AES;
-      const badge = document.getElementById("algo-badge");
-      if (!badge) return;
-      badge.className = info.cls;
-      document.getElementById("algo-label").textContent = info.label;
-      document.getElementById("algo-desc").textContent = info.desc;
-    };
-
-    function setStatus(on) {
-      const dot = document.getElementById("sdot");
-      const txt = document.getElementById("stext");
-      if (dot) dot.className = "sdot" + (on ? " on" : "");
-      if (txt) txt.textContent = on ? "Connecté · chiffré" : "Déconnecté";
-    }
-
-    function esc(s) {
-      return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-    }
-  </script>
+  <!-- Firebase SDKs via CDN (compat version = no module scope issues) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 
   <style>
     :root {
@@ -339,10 +39,8 @@ const app = initializeApp(firebaseConfig);
     @keyframes bg { to { background-position:44px 44px; } }
     @keyframes up { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:none} }
 
-    /* ── AUTH SCREEN ── */
-    #auth-screen {
-      position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:50;
-    }
+    /* AUTH */
+    #auth-screen { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:50; }
     .auth-card {
       background:var(--panel); border:1px solid var(--border); border-radius:20px;
       padding:44px 38px; width:380px;
@@ -352,8 +50,7 @@ const app = initializeApp(firebaseConfig);
     .auth-brand { font-family:var(--mono); font-size:24px; color:var(--accent); letter-spacing:4px; text-align:center; }
     .auth-brand span { color:var(--green); }
     .auth-tagline { font-size:10px; color:var(--muted); letter-spacing:2px; text-transform:uppercase; text-align:center; margin:5px 0 28px; }
-    #auth-title { font-size:13px; color:var(--text); letter-spacing:1px; text-transform:uppercase; margin-bottom:20px; font-family:var(--mono); }
-
+    #auth-title { font-size:13px; color:var(--text); letter-spacing:1px; text-transform:uppercase; margin-bottom:18px; font-family:var(--mono); }
     .auth-card input {
       width:100%; background:rgba(255,255,255,.04); border:1px solid var(--border); border-radius:10px;
       padding:12px 15px; color:var(--text); font-family:var(--mono); font-size:13px;
@@ -361,7 +58,6 @@ const app = initializeApp(firebaseConfig);
     }
     .auth-card input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(0,212,255,.1); }
     .auth-card input::placeholder { color:var(--muted); }
-
     .btn-primary {
       width:100%; background:var(--accent); color:#000; border:none; border-radius:10px;
       padding:13px; font-family:var(--mono); font-size:12px; font-weight:700; letter-spacing:2px;
@@ -375,13 +71,12 @@ const app = initializeApp(firebaseConfig);
       cursor:pointer; transition:border-color .2s, background .2s; margin-bottom:10px;
     }
     .btn-secondary:hover { border-color:var(--accent); background:rgba(0,212,255,.05); }
-
-    #auth-error { background:rgba(255,61,90,.1); border:1px solid rgba(255,61,90,.3); border-radius:8px; padding:10px 13px; font-size:12px; color:var(--red); margin-bottom:10px; display:none; }
-    .auth-toggle { text-align:center; font-size:12px; color:var(--muted); margin-top:6px; }
-    .auth-toggle a { color:var(--accent); cursor:pointer; text-decoration:none; }
+    #auth-error { background:rgba(255,61,90,.1); border:1px solid rgba(255,61,90,.3); border-radius:8px; padding:10px 13px; font-size:12px; color:var(--red); margin-bottom:12px; display:none; }
+    .auth-toggle { text-align:center; font-size:12px; color:var(--muted); margin-top:4px; }
+    .auth-toggle a { color:var(--accent); cursor:pointer; }
     .auth-toggle a:hover { text-decoration:underline; }
 
-    /* ── APP ── */
+    /* APP */
     #app { display:none; width:100vw; height:100vh; grid-template-columns:260px 1fr; }
 
     /* SIDEBAR */
@@ -391,30 +86,20 @@ const app = initializeApp(firebaseConfig);
     .sb-brand span { color:var(--green); }
     .sb-user { font-size:10px; color:var(--muted); margin-top:5px; font-family:var(--mono); }
     .sb-user strong { color:var(--accent); }
-
     .sec-lbl { font-size:9px; color:var(--muted); letter-spacing:2px; text-transform:uppercase; padding:12px 18px 6px; }
     #user-list { padding:0 10px; }
     .user-row { display:flex; align-items:center; gap:9px; padding:8px; border-radius:8px; }
     .udot { width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 5px var(--green); flex-shrink:0; }
     .uname { font-family:var(--mono); font-size:12px; }
     .uname.me { color:var(--accent); }
-
-    #algo-badge {
-      margin:10px; padding:11px 13px; border-radius:10px; border:1px solid;
-      font-size:11px; line-height:1.6; flex-shrink:0;
-    }
+    #algo-badge { margin:10px; padding:11px 13px; border-radius:10px; border:1px solid; font-size:11px; line-height:1.6; }
     #algo-badge .ab-head { font-family:var(--mono); font-size:9px; letter-spacing:2px; opacity:.6; margin-bottom:3px; }
     #algo-badge .ab-label { font-family:var(--mono); font-size:12px; margin-bottom:2px; }
     #algo-badge.aes     { background:rgba(0,212,255,.06); border-color:rgba(0,212,255,.2); color:var(--accent); }
     #algo-badge.des     { background:rgba(255,208,0,.06); border-color:rgba(255,208,0,.2); color:var(--yellow); }
     #algo-badge.elgamal { background:rgba(0,255,153,.06); border-color:rgba(0,255,153,.2); color:var(--green); }
-
-    .sb-bottom { padding:12px; border-top:1px solid var(--border); }
-    .logout-btn {
-      width:100%; background:rgba(255,61,90,.08); color:var(--red); border:1px solid rgba(255,61,90,.2);
-      border-radius:9px; padding:10px; font-family:var(--mono); font-size:11px; letter-spacing:1px;
-      cursor:pointer; transition:background .2s;
-    }
+    .sb-bottom { padding:12px; border-top:1px solid var(--border); margin-top:auto; }
+    .logout-btn { width:100%; background:rgba(255,61,90,.08); color:var(--red); border:1px solid rgba(255,61,90,.2); border-radius:9px; padding:10px; font-family:var(--mono); font-size:11px; letter-spacing:1px; cursor:pointer; transition:background .2s; }
     .logout-btn:hover { background:rgba(255,61,90,.15); }
 
     /* CHAT */
@@ -424,30 +109,18 @@ const app = initializeApp(firebaseConfig);
     .status-pill { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:20px; padding:5px 12px; }
     .sdot { width:6px; height:6px; border-radius:50%; background:var(--red); transition:all .3s; }
     .sdot.on { background:var(--green); box-shadow:0 0 6px var(--green); }
-
     #messages { flex:1; overflow-y:auto; padding:20px 24px; display:flex; flex-direction:column; gap:14px; scroll-behavior:smooth; }
     #messages::-webkit-scrollbar { width:4px; }
     #messages::-webkit-scrollbar-thumb { background:var(--border); border-radius:10px; }
-
     .msg { display:flex; flex-direction:column; max-width:72%; animation:up .2s ease; }
-    .msg.me   { align-self:flex-end; align-items:flex-end; }
+    .msg.me   { align-self:flex-end;   align-items:flex-end; }
     .msg.them { align-self:flex-start; align-items:flex-start; }
     .msg-meta { font-size:10px; color:var(--muted); margin-bottom:4px; display:flex; align-items:center; gap:8px; }
     .msg-meta .sender { font-family:var(--mono); color:var(--accent); }
     .msg.me .msg-meta .sender { color:var(--green); }
-
-    .bubble {
-      background:var(--them-bg); border:1px solid var(--border);
-      border-radius:var(--r) var(--r) var(--r) 3px;
-      padding:10px 14px; font-size:14px; line-height:1.6; word-break:break-word;
-    }
+    .bubble { background:var(--them-bg); border:1px solid var(--border); border-radius:var(--r) var(--r) var(--r) 3px; padding:10px 14px; font-size:14px; line-height:1.6; word-break:break-word; }
     .msg.me .bubble { background:var(--me-bg); border-color:rgba(0,212,255,.18); border-radius:var(--r) var(--r) 3px var(--r); }
-
-    .enc-box {
-      margin-top:5px; background:rgba(0,0,0,.4); border:1px solid var(--border);
-      border-radius:9px; padding:9px 12px; font-family:var(--mono); font-size:10px;
-      color:var(--muted); word-break:break-all; line-height:1.7; width:100%;
-    }
+    .enc-box { margin-top:5px; background:rgba(0,0,0,.4); border:1px solid var(--border); border-radius:9px; padding:9px 12px; font-family:var(--mono); font-size:10px; color:var(--muted); word-break:break-all; line-height:1.7; width:100%; }
     .enc-algo { font-size:11px; margin-bottom:5px; font-weight:bold; }
     .enc-algo.aes { color:var(--accent); }
     .enc-algo.des { color:var(--yellow); }
@@ -455,7 +128,6 @@ const app = initializeApp(firebaseConfig);
     .ef { color:#2a4050; font-size:9px; text-transform:uppercase; letter-spacing:1px; margin-top:4px; }
     .ev { color:var(--muted); }
     .dec-line { color:var(--green); margin-top:5px; border-top:1px solid var(--border); padding-top:5px; }
-
     .sys-msg { align-self:center; font-size:11px; color:var(--muted); background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:20px; padding:4px 14px; font-family:var(--mono); }
 
     /* INPUT */
@@ -463,23 +135,11 @@ const app = initializeApp(firebaseConfig);
     .hint-bar { font-size:11px; color:var(--muted); }
     .hint-bar span { color:var(--accent); }
     .input-row { display:flex; gap:9px; align-items:center; }
-    #algo-select {
-      background:rgba(255,255,255,.04); border:1px solid var(--border); border-radius:9px;
-      padding:0 13px; height:44px; color:var(--text); font-family:var(--mono); font-size:11px;
-      outline:none; cursor:pointer; flex-shrink:0;
-    }
+    #algo-select { background:rgba(255,255,255,.04); border:1px solid var(--border); border-radius:9px; padding:0 13px; height:44px; color:var(--text); font-family:var(--mono); font-size:11px; outline:none; cursor:pointer; flex-shrink:0; }
     #algo-select option { background:#0c1118; }
-    #msg-input {
-      flex:1; background:rgba(255,255,255,.04); border:1px solid var(--border); border-radius:9px;
-      padding:11px 15px; color:var(--text); font-family:var(--sans); font-size:13px;
-      outline:none; transition:border-color .2s, box-shadow .2s;
-    }
+    #msg-input { flex:1; background:rgba(255,255,255,.04); border:1px solid var(--border); border-radius:9px; padding:11px 15px; color:var(--text); font-family:var(--sans); font-size:13px; outline:none; transition:border-color .2s, box-shadow .2s; }
     #msg-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(0,212,255,.1); }
-    #send-btn {
-      background:var(--accent); border:none; border-radius:9px;
-      width:44px; height:44px; display:flex; align-items:center; justify-content:center;
-      cursor:pointer; flex-shrink:0; transition:background .2s, box-shadow .2s, transform .1s;
-    }
+    #send-btn { background:var(--accent); border:none; border-radius:9px; width:44px; height:44px; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; transition:background .2s, box-shadow .2s, transform .1s; }
     #send-btn:hover { background:#33dcff; box-shadow:0 0 18px rgba(0,212,255,.4); }
     #send-btn:active { transform:scale(.93); }
     #send-btn svg { width:18px; height:18px; fill:#000; }
@@ -487,7 +147,7 @@ const app = initializeApp(firebaseConfig);
 </head>
 <body>
 
-<!-- ── AUTH ── -->
+<!-- AUTH -->
 <div id="auth-screen">
   <div class="auth-card">
     <div class="auth-brand">SECURE<span>CHAT</span></div>
@@ -498,7 +158,7 @@ const app = initializeApp(firebaseConfig);
       <input type="text" id="auth-pseudo" placeholder="Votre pseudo affiché..." maxlength="20"/>
     </div>
     <input type="email"    id="auth-email" placeholder="Adresse email"/>
-    <input type="password" id="auth-pass"  placeholder="Mot de passe"/>
+    <input type="password" id="auth-pass"  placeholder="Mot de passe (min 6 caractères)"/>
     <button class="btn-primary"   id="btn-login"    onclick="doLogin()">SE CONNECTER</button>
     <button class="btn-secondary" id="btn-register" onclick="doRegister()" style="display:none">CRÉER LE COMPTE</button>
     <div class="auth-toggle">
@@ -508,25 +168,23 @@ const app = initializeApp(firebaseConfig);
   </div>
 </div>
 
-<!-- ── APP ── -->
+<!-- APP -->
 <div id="app">
   <div id="sidebar">
     <div class="sb-top">
       <div class="sb-brand">SECURE<span>CHAT</span></div>
-      <div class="sb-user">Connecté : <strong id="user-pseudo-display">—</strong><br/><span id="user-email" style="font-size:9px;color:var(--muted)"></span></div>
+      <div class="sb-user">
+        Connecté : <strong id="user-pseudo-display">—</strong><br/>
+        <span id="user-email" style="font-size:9px;color:var(--muted)"></span>
+      </div>
     </div>
-
     <div class="sec-lbl">En ligne</div>
     <div id="user-list"></div>
-
-    <div style="flex:1"></div>
-
     <div id="algo-badge" class="aes">
       <div class="ab-head">🔒 ALGORITHME</div>
       <div class="ab-label" id="algo-label">AES-CBC-256</div>
       <div style="font-size:10px" id="algo-desc">Symétrique · blocs 128 bits · clé 256 bits</div>
     </div>
-
     <div class="sb-bottom">
       <button class="logout-btn" onclick="doLogout()">⏻ SE DÉCONNECTER</button>
     </div>
@@ -558,5 +216,267 @@ const app = initializeApp(firebaseConfig);
   </div>
 </div>
 
+<script>
+  // ══════════════════════════════════════════════════
+  // 🔧 REMPLACEZ PAR VOTRE firebaseConfig
+  // ══════════════════════════════════════════════════
+  const firebaseConfig = {
+    apiKey:            "VOTRE_API_KEY",
+    authDomain:        "VOTRE_PROJECT.firebaseapp.com",
+    projectId:         "VOTRE_PROJECT_ID",
+    storageBucket:     "VOTRE_PROJECT.appspot.com",
+    messagingSenderId: "VOTRE_SENDER_ID",
+    appId:             "VOTRE_APP_ID"
+  };
+
+  // 🔧 URL WebSocket backend (localhost pour test, wss://... pour production)
+  const WS_BASE = "ws://localhost:8000/ws/";
+  // ══════════════════════════════════════════════════
+
+  // Init Firebase (compat SDK — pas de module scope)
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db   = firebase.firestore();
+
+  let ws = null;
+  let currentUser = null;
+  let unsubscribeFS = null;
+  let isRegisterMode = false;
+  const renderedIds = new Set();
+
+  const algoInfo = {
+    AES:     { cls:"aes",     label:"AES-CBC-256", desc:"Symétrique · blocs 128 bits · clé 256 bits" },
+    DES:     { cls:"des",     label:"DES-CBC",     desc:"Legacy symétrique · blocs 64 bits (pédagogique)" },
+    ElGamal: { cls:"elgamal", label:"ElGamal",     desc:"Asymétrique · logarithme discret" }
+  };
+
+  // ── AUTH STATE ──
+  auth.onAuthStateChanged(user => {
+    if (user) {
+      currentUser = user;
+      const pseudo = localStorage.getItem("sc_pseudo") || user.email.split("@")[0];
+      enterApp(pseudo, user);
+    } else {
+      currentUser = null;
+      leaveApp();
+    }
+  });
+
+  // ── REGISTER ──
+  function doRegister() {
+    const email  = document.getElementById("auth-email").value.trim();
+    const pass   = document.getElementById("auth-pass").value;
+    const pseudo = document.getElementById("auth-pseudo").value.trim();
+    if (!email || !pass || !pseudo) return showAuthError("Remplissez tous les champs.");
+    if (pass.length < 6) return showAuthError("Mot de passe : minimum 6 caractères.");
+    auth.createUserWithEmailAndPassword(email, pass)
+      .then(() => { localStorage.setItem("sc_pseudo", pseudo); })
+      .catch(e => showAuthError(translateError(e.code)));
+  }
+
+  // ── LOGIN ──
+  function doLogin() {
+    const email = document.getElementById("auth-email").value.trim();
+    const pass  = document.getElementById("auth-pass").value;
+    if (!email || !pass) return showAuthError("Email et mot de passe requis.");
+    auth.signInWithEmailAndPassword(email, pass)
+      .catch(e => showAuthError(translateError(e.code)));
+  }
+
+  // ── LOGOUT ──
+  function doLogout() {
+    if (ws) ws.close();
+    if (unsubscribeFS) unsubscribeFS();
+    auth.signOut();
+  }
+
+  // ── TOGGLE MODE ──
+  function toggleAuthMode() {
+    isRegisterMode = !isRegisterMode;
+    document.getElementById("pseudo-field").style.display  = isRegisterMode ? "block" : "none";
+    document.getElementById("btn-login").style.display     = isRegisterMode ? "none"  : "block";
+    document.getElementById("btn-register").style.display  = isRegisterMode ? "block" : "none";
+    document.getElementById("auth-title").textContent      = isRegisterMode ? "Créer un compte" : "Connexion";
+    document.getElementById("auth-toggle-text").textContent= isRegisterMode ? "Déjà un compte ? " : "Pas de compte ? ";
+    document.getElementById("auth-toggle-link").textContent= isRegisterMode ? "Se connecter" : "S'inscrire";
+    document.getElementById("auth-error").style.display    = "none";
+  }
+
+  function showAuthError(msg) {
+    const el = document.getElementById("auth-error");
+    el.textContent = msg; el.style.display = "block";
+    setTimeout(() => { el.style.display = "none"; }, 5000);
+  }
+
+  function translateError(code) {
+    const map = {
+      "auth/email-already-in-use":    "Cet email est déjà utilisé.",
+      "auth/invalid-email":           "Email invalide.",
+      "auth/weak-password":           "Mot de passe trop faible (min 6 caractères).",
+      "auth/user-not-found":          "Aucun compte avec cet email.",
+      "auth/wrong-password":          "Mot de passe incorrect.",
+      "auth/invalid-credential":      "Email ou mot de passe incorrect.",
+      "auth/too-many-requests":       "Trop de tentatives. Réessayez plus tard.",
+      "auth/network-request-failed":  "Erreur réseau. Vérifiez votre connexion.",
+    };
+    return map[code] || "Erreur : " + code;
+  }
+
+  // ── ENTER / LEAVE APP ──
+  function enterApp(pseudo, user) {
+    document.getElementById("auth-screen").style.display = "none";
+    document.getElementById("app").style.display = "grid";
+    document.getElementById("user-email").textContent = user.email;
+    document.getElementById("user-pseudo-display").textContent = pseudo;
+    connectWS(pseudo);
+    listenFirestore();
+  }
+
+  function leaveApp() {
+    document.getElementById("auth-screen").style.display = "flex";
+    document.getElementById("app").style.display = "none";
+    document.getElementById("messages").innerHTML = "";
+    renderedIds.clear();
+  }
+
+  // ── WEBSOCKET ──
+  function connectWS(pseudo) {
+    ws = new WebSocket(WS_BASE + encodeURIComponent(pseudo));
+    ws.onopen  = () => setStatus(true);
+    ws.onclose = () => setStatus(false);
+    ws.onerror = () => setStatus(false);
+    ws.onmessage = e => {
+      const data = JSON.parse(e.data);
+      if (data.type === "system")  { appendSystem(data.text); updateUsers(data.users); }
+      if (data.type === "message") { renderMessage(data, false); }
+    };
+  }
+
+  function sendMessage() {
+    const input = document.getElementById("msg-input");
+    const text  = input.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const algo   = document.getElementById("algo-select").value;
+    const pseudo = localStorage.getItem("sc_pseudo") || currentUser.email.split("@")[0];
+    input.value = "";
+    ws.send(JSON.stringify({ text, algo, uid: currentUser.uid, timestamp: new Date().toISOString() }));
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("msg-input").addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
+    });
+    document.getElementById("auth-pass").addEventListener("keydown", e => {
+      if (e.key === "Enter") isRegisterMode ? doRegister() : doLogin();
+    });
+  });
+
+  // ── FIRESTORE ──
+  function listenFirestore() {
+    const q = db.collection("messages").orderBy("createdAt", "asc");
+    unsubscribeFS = q.onSnapshot(snapshot => {
+      snapshot.docChanges().forEach(change => {
+        if (change.type === "added") {
+          const d = change.doc.data();
+          if (d.createdAt) {
+            renderMessage({
+              from:      d.from,
+              plaintext: d.plaintext,
+              encrypted: JSON.parse(d.encrypted || "{}"),
+              algo:      d.algo,
+              timestamp: d.createdAt.toDate ? d.createdAt.toDate().toISOString() : "",
+            }, true);
+          }
+        }
+      });
+    });
+  }
+
+  function saveToFirestore(data) {
+    if (!currentUser) return;
+    db.collection("messages").add({
+      from:      data.from,
+      plaintext: data.plaintext,
+      encrypted: JSON.stringify(data.encrypted),
+      algo:      data.algo,
+      uid:       data.uid || currentUser.uid,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).catch(e => console.error("Firestore:", e));
+  }
+
+  // ── RENDER ──
+  function renderMessage(data, fromHistory) {
+    const id = data.from + "|" + data.timestamp + "|" + data.plaintext;
+    if (renderedIds.has(id)) return;
+    renderedIds.add(id);
+
+    const pseudo = localStorage.getItem("sc_pseudo") || (currentUser?.email.split("@")[0] || "");
+    const isMe   = data.from === pseudo;
+    const box    = document.getElementById("messages");
+    const time   = data.timestamp ? new Date(data.timestamp).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}) : "";
+    const enc    = data.encrypted || {};
+    const algo   = data.algo || "AES";
+    const cls    = algo === "ElGamal" ? "elgamal" : algo === "DES" ? "des" : "aes";
+
+    let encDetails = "";
+    if (algo === "AES" || algo === "DES") {
+      encDetails = `<div class="ef">IV</div><div class="ev">${enc.iv||""}</div>
+                    <div class="ef">Chiffré (base64)</div><div class="ev">${enc.ciphertext||""}</div>`;
+    } else {
+      const c2 = enc.c2_list || [];
+      encDetails = `<div class="ef">C1</div><div class="ev">${String(enc.c1||"").substring(0,48)}…</div>
+                    <div class="ef">C2 aperçu</div><div class="ev">${c2.slice(0,3).join(", ")}${c2.length>3?" …":""}</div>`;
+    }
+
+    const div = document.createElement("div");
+    div.className = "msg " + (isMe ? "me" : "them");
+    div.innerHTML = `
+      <div class="msg-meta"><span class="sender">${esc(data.from)}</span><span>${time}</span></div>
+      <div class="bubble">${esc(data.plaintext)}</div>
+      <div class="enc-box">
+        <div class="enc-algo ${cls}">🔒 ${enc.algo || algo}</div>
+        ${encDetails}
+        <div class="dec-line">✓ Déchiffré : ${esc(data.plaintext)}</div>
+      </div>`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+
+    if (!fromHistory) saveToFirestore(data);
+  }
+
+  function appendSystem(text) {
+    const box = document.getElementById("messages");
+    const d = document.createElement("div");
+    d.className = "sys-msg"; d.textContent = text;
+    box.appendChild(d); box.scrollTop = box.scrollHeight;
+  }
+
+  function updateUsers(users) {
+    const pseudo = localStorage.getItem("sc_pseudo") || "";
+    document.getElementById("user-list").innerHTML = users.map(u => `
+      <div class="user-row">
+        <div class="udot"></div>
+        <span class="uname ${u===pseudo?'me':''}">${esc(u)}${u===pseudo?' (moi)':''}</span>
+      </div>`).join("");
+  }
+
+  function updateAlgoBadge() {
+    const algo = document.getElementById("algo-select").value;
+    const info = algoInfo[algo] || algoInfo.AES;
+    const badge = document.getElementById("algo-badge");
+    badge.className = info.cls;
+    document.getElementById("algo-label").textContent = info.label;
+    document.getElementById("algo-desc").textContent  = info.desc;
+  }
+
+  function setStatus(on) {
+    document.getElementById("sdot").className    = "sdot" + (on ? " on" : "");
+    document.getElementById("stext").textContent = on ? "Connecté · chiffré" : "Déconnecté";
+  }
+
+  function esc(s) {
+    return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+</script>
 </body>
 </html>
