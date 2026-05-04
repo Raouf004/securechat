@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /messages/{msgId} {
+      // Lecture : uniquement les utilisateurs connectés
+      allow read: if request.auth != null;
+      // Écriture : uniquement les utilisateurs connectés
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      // Modification/suppression : interdites
+      allow update, delete: if false;
+    }
+  }
+}
