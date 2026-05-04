@@ -219,24 +219,25 @@
 <script>
   // ══════════════════════════════════════════════════
   // 🔧 REMPLACEZ PAR VOTRE firebaseConfig
+  import { initializeApp } from "firebase/app";
   // ══════════════════════════════════════════════════
   const firebaseConfig = {
-    apiKey:            "VOTRE_API_KEY",
-    authDomain:        "VOTRE_PROJECT.firebaseapp.com",
-    projectId:         "VOTRE_PROJECT_ID",
-    storageBucket:     "VOTRE_PROJECT.appspot.com",
-    messagingSenderId: "VOTRE_SENDER_ID",
-    appId:             "VOTRE_APP_ID"
-  };
+  apiKey: "AIzaSyAw44WpD2pa6J1BG1nlqOQpHPantD-Ri9U",
+  authDomain: "chat-67fc8.firebaseapp.com",
+  projectId: "chat-67fc8",
+  storageBucket: "chat-67fc8.firebasestorage.app",
+  messagingSenderId: "519172128581",
+  appId: "1:519172128581:web:2583a60089607553db482c"
+};
 
   // 🔧 URL WebSocket backend (localhost pour test, wss://... pour production)
   const WS_BASE = "ws://localhost:8000/ws/";
   // ══════════════════════════════════════════════════
 
   // Init Firebase (compat SDK — pas de module scope)
-  firebase.initializeApp(firebaseConfig);
-  const auth = firebase.auth();
-  const db   = firebase.firestore();
+  initializeApp(firebaseConfig);
+  const auth = getAuth();
+  const db   = getFirestore();
 
   let ws = null;
   let currentUser = null;
